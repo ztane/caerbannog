@@ -1,6 +1,25 @@
 # -*- coding: utf-8 -*-
 import wabbit_wappa as _wabbit_wappa
 from math import exp
+import copy
+from collections.abc import Mapping
+
+
+class Namespace(_wabbit_wappa.Namespace):
+    """
+    A subclass of wabbit wappa Namespace that allows one to set
+    features from a dictionary
+    """
+
+    def add_features(self, features):
+        """
+        Overridden add_features allows setting features from a dictionary/mapping
+        """
+
+        if isinstance(features, Mapping):
+            features = features.items()
+
+        super(Namespace, self).add_features(features)
 
 
 class Example(object):
@@ -26,11 +45,16 @@ class Example(object):
             self.add_namespaces(namespaces)
 
         if features:
-            self.add_namespace(NameSpace(features=features))
+            self.add_namespace(Namespace(features=features))
+
+    def __getitem__(self, name):
+        return self.namespace(name)
 
     def namespace(self, name=None):
-        if not name in namespaces:
+        if not name in self.namespaces:
             self.add_namespace(Namespace(name=name))
+
+        return self.namespaces[name]        
 
     def add_feature(self, feature, value=None, namespace=None):
         self.namespace(namespace).add_feature(feature, value)
@@ -44,6 +68,7 @@ class Example(object):
 
     def add_namespace(self, namespace):
         self.namespaces[namespace.name] = namespace
+        return namespace
 
     def make_line(self, label=None, importance=None, base=None, tag=None):
         """Makes and returns an example string in VW syntax.
@@ -91,16 +116,23 @@ class Example(object):
 
         line = '|'.join(substrings)
         return line
+
+    def __str__(self):
+        return "<Example: '{}'>".format(self.make_line())
     
 
-class LogisticPrediction(object):
+class BinaryLogisticPredictionResult(object):
     def __init__(self, result):
-        self.value = result.value
+        self.value = result.prediction
         if hasattr(result, 'importance'):
             self.importance = result.importance
 
     @property
-    def logistic():
+    def label(self):
+        return (-1, 1)[self.value >= 0]
+
+    @property
+    def logistic(self):
         """
         Returns the 0..1 probability of label being 1
         """
@@ -108,7 +140,7 @@ class LogisticPrediction(object):
         return 1.0 / (1.0 + exp(-self.value))
 
     @property
-    def logistic_11():
+    def logistic_11(self):
         """
         Returns the value of -1..1 logistic function at
         the resulting value.
@@ -118,16 +150,16 @@ class LogisticPrediction(object):
 
 
 class Rabbit(object):
-    _prediction_factory = LogisticPrediction
+    _result_factory = BinaryLogisticPredictionResult
 
     def __init__(self, **kwargs):
         self.options = kwargs
 
     def start(self):
-        self.vw = VW(**self.options)
+        self.vw = _wabbit_wappa.VW(**self.options)
 
-    def send_line(self, line):
-        self.vw.send_line(line)
+    def send_line(self, line, parse_response=False):
+        return self.vw.send_line(line, parse_response)
 
     def make_line(self, *, example=None, label=None, importance=None, base=None,
                   tag=None, features=None, namespaces=None, no_label=False):
@@ -148,10 +180,10 @@ class Rabbit(object):
               features=None, namespaces=None):
         line = self.make_line(example=example, label=label, importance=importance,
                               tag=tag, features=features, namespaces=namespaces)
-        self.send_line(line)
+        self.send_line(line, parse_response=True)
 
     def _get_prediction_for_line(self, line):
-        return self._prediction_factory(self.vw.get_prediction(line))
+        return self._result_factory(self.send_line(line, True))
 
     def predict(self, *, example=None, base=None, tag=None,
                 features=None, namespaces=None):
@@ -174,7 +206,7 @@ class OfflineRabbit(Rabbit):
         Other parameters as per Rabbit
         """
 
-        super(Rabbit, self).__init__(kwargs)
+        super(OfflineRabbit, self).__init__(**kwargs)
         self.fp = fp
 
     def start(self):
@@ -186,11 +218,11 @@ class OfflineRabbit(Rabbit):
     def predict(self):
         raise Exception("Unable to predict without an actual VW instance")
 
-    def send_line(self, line):
+    def send_line(self, line, parse_response=False):
         self.fp.write(line + '\n')
 
-class ActiveRabbit(object):
+
+class ActiveRabbit(Rabbit):
     def __init__(self, **kwargs):
-        super(ActiveRabbit, self).__init__(**kwargs)
-        self.options['active'] = True
+        super(ActiveRabbit, self).__init__(active_mode=True, **kwargs)
 
